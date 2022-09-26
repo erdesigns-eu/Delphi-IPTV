@@ -305,6 +305,7 @@ type
 
     procedure Assign(Source: TPersistent); override;
 
+    procedure LoadFromStream(const M3U: TM3U; const Stream: System.Classes.TStream);
     procedure LoadFromFile(const M3U: TM3U; const Filename: String);
   published
     property OnProgress: TM3UReaderProgressEvent read FOnProgress write FOnProgress;
@@ -317,8 +318,8 @@ type
     property Filename: TFilename read FFilename write SetFilename;
     property Lines: TStringList read FLines;
     property Max: Integer read GetMax;
-    property Directives: TDefTagCollection read FDirectives;
-    property Attributes: TDefTagCollection read FAttributes;
+    property Directives: TDefTagCollection read FDirectives stored True;
+    property Attributes: TDefTagCollection read FAttributes stored True;
   end;
 
 type
@@ -334,6 +335,7 @@ type
     FOnStart    : TNotifyEvent;
     FOnFinish   : TNotifyEvent;
   public
+    procedure SaveToStream(const M3U: TM3U; const Stream: System.Classes.TStream);
     procedure SaveToFile(const M3U: TM3U; const Filename: String);
   published
     property OnProgress: TM3UWriterProgressEvent read FOnProgress write FOnProgress;
@@ -342,10 +344,11 @@ type
   end;
 
 type
-  TXtreamReaderProgressEvent = procedure(Position: Integer; Line: String) of object;
+  TXtreamReaderProgressEvent = procedure(Max: Integer; Position: Integer) of object;
   TXtreamReaderErrorEvent    = procedure(ErrorCode: Integer; ErrorMessage: String) of object;
+  TXtreamReaderFinishEvent   = procedure(Live: Integer; Movies: Integer; Series: Integer) of object;
 
-  TXtreamStreamType = (stLive, stMovie, stSeries);
+  TXtreamStreamType = (stLive, stMovies, stSeries);
   TXtreamStreamTypes = set of TXtreamStreamType;
 
 {*******************************************************}
@@ -364,7 +367,7 @@ type
   private
     FOnProgress : TXtreamReaderProgressEvent;
     FOnStart    : TNotifyEvent;
-    FOnFinish   : TNotifyEvent;
+    FOnFinish   : TXtreamReaderFinishEvent;
     FOnError    : TXtreamReaderErrorEvent;
 
     FScheme     : String;
@@ -382,13 +385,13 @@ type
   public
     constructor Create(AOwner: TComponent); override;
 
-    procedure LoadFromAPI(const M3U: TM3U; const StreamTypes: TXtreamStreamTypes = [stLive, stMovie, stSeries]);
+    procedure LoadFromAPI(const M3U: TM3U; const StreamTypes: TXtreamStreamTypes = [stLive, stMovies, stSeries]);
     procedure LoadFromURL(const M3U: TM3U; const URL: String;
-      const StreamTypes: TXtreamStreamTypes = [stLive, stMovie, stSeries]);
+      const StreamTypes: TXtreamStreamTypes = [stLive, stMovies, stSeries]);
   published
     property OnProgress: TXtreamReaderProgressEvent read FOnProgress write FOnProgress;
     property OnStart: TNotifyEvent read FOnStart write FOnStart;
-    property OnFinish: TNotifyEvent read FOnFinish write FOnFinish;
+    property OnFinish: TXtreamReaderFinishEvent read FOnFinish write FOnFinish;
     property OnError: TXtreamReaderErrorEvent read FOnError write FOnError;
 
     property Scheme: String read FScheme write FScheme;
@@ -772,7 +775,7 @@ var
   LI   : TDefTagCollection;
   Loop : Integer;
 begin
-  if (Source is TDefTagCollection)  then
+  if (Source is TDefTagCollection) then
   begin
     LI := TDefTagCollection(Source);
     Clear;
@@ -998,10 +1001,19 @@ procedure TM3UReader.Parse(const M3U: TM3U);
 type
   TLineType = (ltFileHeader, ltAttributes, ltDirective, ltSource, ltOther);
 
+  function IsURI(const Line: String) : Boolean;
+  begin
+    try
+      TURI.Create(Line);
+      Result := True;
+    except
+      Result := False;
+    end;
+  end;
+
   function IsValidSource(const Line: String) : Boolean;
   begin
-    Result :=  (Line.StartsWith('http://', True) or Line.StartsWith('https://', True) or Line.StartsWith('ftp://', True) or Line.StartsWith('rtmp://', True))
-               or (DirectoryExists(ExtractFilePath(Line)) and TPath.HasValidFileNameChars(ExtractFileName(Line), False));
+    Result :=  IsURI(Line) or (DirectoryExists(ExtractFilePath(Line)) and TPath.HasValidFileNameChars(ExtractFileName(Line), False));
   end;
 
   function LineType(const Line: String) : TLineType;
@@ -1220,6 +1232,7 @@ begin
       // Source (URL/Filename)
       ltSource:
       begin
+        if Stream = nil then Stream := M3U.Streams.Add;
         ParseSource(Line, Stream);
         if Stream <> nil then Stream := nil;
       end;
@@ -1227,10 +1240,12 @@ begin
       // Other (Ignore this line)
       ltOther:
       begin
-        UpdateProgress(LineIndex, Line);
       end;
 
     end;
+
+    // Update progress
+    UpdateProgress(LineIndex, Line);
   end;
 
   // Finish
@@ -1245,6 +1260,28 @@ begin
     FAttributes.Assign((Source as TM3UReader).Attributes);
   end else
     inherited Assign(Source);
+end;
+
+procedure TM3UReader.LoadFromStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+
+  function IsValidM3UFormat : Boolean;
+  begin
+    Result := FLines[0].StartsWith('#EXTM3U', True);
+  end;
+
+begin
+  FLines.Clear;
+  FLines.LoadFromStream(Stream, TEncoding.UTF8);
+
+  // Check if loaded file is a valid M3U file
+  if not IsValidM3UFormat then
+  begin
+    FLines.Clear;
+    raise Exception.CreateFmt('File %s is not a valid M3U file!', [ExtractFilename(Filename)]);
+  end;
+
+  FFilename := Filename;
+  Parse(M3U);
 end;
 
 procedure TM3UReader.LoadFromFile(const M3U: TM3U; const Filename: String);
@@ -1272,6 +1309,82 @@ end;
 {*******************************************************}
 {                   M3U Writer Class                    }
 {*******************************************************}
+procedure TM3UWriter.SaveToStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+function FileHeader(const Attributes: TAttributeCollection) : String;
+  var
+    I : Integer;
+  begin
+    Result := '#EXTM3U';
+    for I := 0 to Attributes.Count -1 do
+    Result := Result + Format(' %s="%s"', [Attributes[I].Name, Attributes[I].Value]);
+  end;
+
+  function PlaylistDirective(const Directive: TTag) : String;
+  begin
+    if Directive.Name.StartsWith('#EXT', True) then
+      Result := Format('%s:%s', [Directive.Name, Directive.Value])
+    else
+      Result := Format('#EXT%s:%s', [Directive.Name, Directive.Value]);
+  end;
+
+  function StreamHeader(const Stream: TStream) : String;
+  var
+    I : Integer;
+  begin
+    Result := Format('#EXTINF %f,', [Stream.Length]);
+    for I := 0 to Stream.Attributes.Count -1 do
+    Result := Result + Format(' %s="%s"', [Stream.Attributes[I].Name, Stream.Attributes[I].Value]);
+    Result := Result + Format(',%s', [Stream.Name]);
+  end;
+
+  function StreamDirective(const Directive: TTag) : String;
+  begin
+    Result := PlaylistDirective(Directive);
+  end;
+
+  function StreamSource(const Stream: TStream) : String;
+  begin
+    Result := Stream.Source;
+  end;
+
+var
+  Lines : TStringList;
+  S, I  : Integer;
+begin
+  // Start
+  if Assigned(FOnStart) then FOnStart(Self);
+
+  // Write M3U File
+  Lines := TStringList.Create;
+  try
+    // M3U File Header and Attributes
+    Lines.Add(FileHeader(M3U.Attributes));
+    // M3U Directives
+    for I := 0 to M3U.Directives.Count -1 do
+    Lines.Add(PlaylistDirective(M3U.Directives[I]));
+    // Streams
+    for S := 0 to M3U.Streams.Count -1 do
+    begin
+      // Progress
+      if Assigned(FOnProgress) then FOnProgress(M3U.Streams.Count, S, M3U.Streams[S]);
+      // Stream Header
+      Lines.Add(StreamHeader(M3U.Streams[S]));
+      // Stream Directives
+      for I := 0 to M3U.Streams[S].Directives.Count -1 do
+      Lines.Add(StreamDirective(M3U.Streams[S].Directives[I]));
+      // Stream Source
+      Lines.Add(StreamSource(M3U.Streams[S]));
+    end;
+    // Save to File
+    Lines.SaveToStream(Stream, TEncoding.UTF8);
+  finally
+    Lines.Free;
+  end;
+
+  // Finished
+  if Assigned(FOnFinish) then FOnFinish(Self);
+end;
+
 procedure TM3UWriter.SaveToFile(const M3U: TM3U; const Filename: String);
 
   function FileHeader(const Attributes: TAttributeCollection) : String;
@@ -1367,9 +1480,11 @@ begin
   FtvgChnoAttribute := True;
 end;
 
-procedure TXtreamReader.LoadFromAPI(const M3U: TM3U; const StreamTypes: TXtreamStreamTypes = [stLive, stMovie, stSeries]);
+procedure TXtreamReader.LoadFromAPI(const M3U: TM3U; const StreamTypes: TXtreamStreamTypes = [stLive, stMovies, stSeries]);
 type
   TURIParameters = Array of TURIParameter;
+var
+  Live, Movies, Series : Integer;
 
   function GetFromAPI(const Parameters: TURIParameters = []): String;
   var
@@ -1418,12 +1533,12 @@ type
   const
     StreamTypeStr: array[TXtreamStreamType] of String = ('live_streams', 'vod_streams', 'series');
   var
-    JSON       : TJSONValue;
-    Item       : TJSONObject;
-    Categories : TStringList;
-    Stream     : TStream;
-    URI        : TURI;
-    I          : Integer;
+    JSON, JSON2        : TJSONValue;
+    Item, Item2, Item3 : TJSONObject;
+    Categories         : TStringList;
+    Stream             : TStream;
+    URI                : TURI;
+    I, J, L            : Integer;
   begin
     Categories := TStringList.Create;
     try
@@ -1455,12 +1570,14 @@ type
             URI.Port   := Port;
             for I := 0 to (JSON as TJSONArray).Count -1 do
             begin
+              if Assigned(FOnProgress) then FOnProgress((JSON as TJSONArray).Count, I);
               Item := (JSON as TJSONArray).Items[I] as TJSONObject;
               case StreamType of
 
                 // LIVE TV
                 stLive: 
                 begin
+                  Inc(Live);
                   // Create Stream
                   Stream := M3U.Streams.Add;
                   // Stream Name
@@ -1513,13 +1630,14 @@ type
                 end;
                 
                 // MOVIES
-                stMovie:
+                stMovies:
                 begin
+                  Inc(Movies);
                   // Create Stream
                   Stream := M3U.Streams.Add;
                   // Stream Name
                   Stream.Name := Item.Get('name').JsonValue.Value;
-                  // Stream Source       
+                  // Stream Source
                   URI.Path := Format('/movie/%s/%s/%s.%s', [username, Password, Item.Get('stream_id').JsonValue.Value, Item.Get('container_extension').JsonValue.Value]);
                   Stream.Source := URI.ToString;
                   // Stream tvg-name attribute
@@ -1558,11 +1676,66 @@ type
                     Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
                   end;
                 end;
-                
+
                 // SERIES
                 stSeries: 
                 begin
-                  // ToDo!!!
+                  // Get episode streams for this series
+                  JSON2 := TJSONObject.ParseJSONValue(GetFromAPI([TURIParameter.Create('action', 'get_series_info'), TURIParameter.Create('series_id', Item.Get('series_id').JsonValue.Value)]));
+                  try
+                    Item2 := (JSON2 as TJSONObject).Get('episodes').JsonValue as TJSONObject;
+                    for J := 0 to Item2.Count -1 do
+                    for L := 0 to (Item2.Get(J).JsonValue as TJSONArray).Count -1 do
+                    begin
+                      Inc(Series);
+                      // Episode Item
+                      Item3 := (Item2.Get(J).JsonValue as TJSONArray).Items[L] as TJSONObject;
+                      // Create Stream
+                      Stream := M3U.Streams.Add;
+                      // Stream Name
+                      Stream.Name := Item3.Get('title').JsonValue.Value;
+                      // Stream Source
+                      URI.Path := Format('/series/%s/%s/%s.%s', [username, Password, Item3.Get('id').JsonValue.Value, Item3.Get('container_extension').JsonValue.Value]);
+                      Stream.Source := URI.ToString;
+                      // Stream tvg-name attribute
+                      if tvgNameAttribute then
+                      with Stream.Attributes.Add do
+                      begin
+                        Name  := 'tvg-name';
+                        Value := Item3.Get('title').JsonValue.Value;
+                      end;
+                      // Stream tvg-logo attribute
+                      if tvgLogoAttribute then
+                      with Stream.Attributes.Add do
+                      begin
+                        Name  := 'tvg-logo';
+                        Value := Item.Get('cover').JsonValue.Value;
+                      end;
+                      // Stream tvg-chno attribute
+                      if tvgChnoAttribute then
+                      with Stream.Attributes.Add do
+                      begin
+                        Name  := 'tvg-chno';
+                        Value := Item.Get('num').JsonValue.Value;
+                      end;
+                      // Stream group-title attribute
+                      if GroupAttribute then
+                      with Stream.Attributes.Add do
+                      begin
+                        Name  := 'group-title';
+                        Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
+                      end;
+                      // Stream EXTGRP directive
+                      if GroupDirective then
+                      with Stream.Directives.Add do
+                      begin
+                        Name  := '#EXTGRP';
+                        Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
+                      end;
+                    end;
+                  finally
+                    JSON2.Free;
+                  end;
                 end;
               end;
             end;
@@ -1604,19 +1777,27 @@ begin
   // Start
   if Assigned(FOnStart) then FOnStart(Self);
 
+  // Reset counters
+  Live     := 0;
+  Movies   := 0;
+  Series   := 0;
+
   // Live Streams
   if stLive in StreamTypes then
   LoadStreamsFromAPI(M3U, stLive);
   // Movie Streams
-  if stMovie in StreamTypes then
-  LoadStreamsFromAPI(M3U, stMovie);
+  if stMovies in StreamTypes then
+  LoadStreamsFromAPI(M3U, stMovies);
+  // Series Streams
+  if stSeries in StreamTypes then
+  LoadStreamsFromAPI(M3U, stSeries);
 
   // Finish
-  if Assigned(FOnFinish) then FOnFinish(Self);
+  if Assigned(FOnFinish) then FOnFinish(Live, Movies, Series);
 end;
 
 procedure TXtreamReader.LoadFromURL(const M3U: TM3U; const URL: String;
-  const StreamTypes: TXtreamStreamTypes = [stLive, stMovie, stSeries]);
+  const StreamTypes: TXtreamStreamTypes = [stLive, stMovies, stSeries]);
 var
   URI : TURI;
 begin
@@ -1647,7 +1828,7 @@ begin
     TStreamCollection
   ]);
   // Register components
-  RegisterComponents('ERDesigns', [
+  RegisterComponents('ERDesigns M3U', [
     TM3U,
     TM3UReader,
     TM3UWriter,
