@@ -351,6 +351,11 @@ type
   TXtreamStreamType = (stLive, stMovies, stSeries);
   TXtreamStreamTypes = set of TXtreamStreamType;
 
+  TXtreamAttribute = (aGroupTitle, aTvgName, aTvgID, aTvgLogo, aTvgChno, aRadio);
+  TXtreamAttributes = set of TXtreamAttribute;
+  TXtreamDirective = (dGroupTitle);
+  TXtreamDirectives = set of TXtreamDirective;
+
 {*******************************************************}
 {                 Xtream Reader Class                   }
 {*******************************************************}
@@ -375,13 +380,10 @@ type
     FPort       : Integer;
     FUsername   : String;
     FPassword   : String;
+    FUseragent  : String;
 
-    FGroupAttribute   : Boolean;
-    FGroupDirective   : Boolean;
-    FtvgNameAttribute : Boolean;
-    FtvgIDAttribute   : Boolean;
-    FtvgLogoAttribute : Boolean;
-    FtvgChnoAttribute : Boolean;
+    FAttributes : TXtreamAttributes;
+    FDirectives : TXtreamDirectives;
   public
     constructor Create(AOwner: TComponent); override;
 
@@ -396,17 +398,63 @@ type
 
     property Scheme: String read FScheme write FScheme;
     property Host: String read FHost write FHost;
-    property Port: Integer read FPort write FPort default 0;
+    property Port: Integer read FPort write FPort default 80;
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
+    property Useragent: String read FUseragent write FUseragent;
 
-    property GroupAttribute: Boolean read FGroupAttribute write FGroupAttribute default True;
-    property GroupDirective: Boolean read FGroupDirective write FGroupDirective default False;
+    property Attributes: TXtreamAttributes read FAttributes write FAttributes default
+      [aGroupTitle, aTvgName, aTvgID, aTvgLogo, aTvgChno, aRadio];
+    property Directives: TXtreamDirectives read FDirectives write FDirectives default [];
+  end;
 
-    property tvgNameAttribute: Boolean read FtvgNameAttribute write FtvgNameAttribute default True;
-    property tvgIDAttribute: Boolean read FtvgIDAttribute write FtvgIDAttribute default True;
-    property tvgLogoAttribute: Boolean read FtvgLogoAttribute write FtvgLogoAttribute default True;
-    property tvgChnoAttribute: Boolean read FtvgChnoAttribute write FtvgChnoAttribute default True; 
+type
+  TPLSReaderProgressEvent = procedure(Max: Integer; Position: Integer) of object;
+  TPLSReaderErrorEvent    = procedure(ErrorCode: Integer; ErrorMessage: String) of object;
+
+{*******************************************************}
+{                   PLS Reader Class                    }
+{*******************************************************}
+type
+  TPLSReader = class(TComponent)
+  public const
+    ERROR_INVALID_FILE    = 0;
+    ERROR_MISSING_ENTRIES = 1;
+  private
+    FOnProgress : TPLSReaderProgressEvent;
+    FOnStart    : TNotifyEvent;
+    FOnFinish   : TNotifyEvent;
+    FOnError    : TPLSReaderErrorEvent;
+  public
+    procedure LoadFromStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+    procedure LoadFromFile(const M3U: TM3U; const Filename: String);
+  published
+    property OnProgress: TPLSReaderProgressEvent read FOnProgress write FOnProgress;
+    property OnStart: TNotifyEvent read FOnStart write FOnStart;
+    property OnFinish: TNotifyEvent read FOnFinish write FOnFinish;
+    property OnError: TPLSReaderErrorEvent read FOnError write FOnError;
+  end;
+
+type
+  TPLSWriterProgressEvent = procedure(Max: Integer; Position: Integer) of object;
+  TPLSWriterErrorEvent    = procedure(ErrorCode: Integer; ErrorMessage: String) of object;
+
+{*******************************************************}
+{                   PLS Writer Class                    }
+{*******************************************************}
+type
+  TPLSWriter = class(TComponent)
+  private
+    FOnProgress : TPLSWriterProgressEvent;
+    FOnStart    : TNotifyEvent;
+    FOnFinish   : TNotifyEvent;
+  public
+    procedure SaveToStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+    procedure SaveToFile(const M3U: TM3U; const Filename: String);
+  published
+    property OnProgress: TPLSWriterProgressEvent read FOnProgress write FOnProgress;
+    property OnStart: TNotifyEvent read FOnStart write FOnStart;
+    property OnFinish: TNotifyEvent read FOnFinish write FOnFinish;
   end;
 
 {$IFNDEF TAGVARIANT}
@@ -427,7 +475,8 @@ uses
   System.IOUtils,
   System.JSON,
   System.Net.URLClient,
-  System.Net.HttpClient;
+  System.Net.HttpClient,
+  System.IniFiles;
 
 {$IFNDEF TAGVARIANT}
 procedure InitCharUpCaseTable(var Table: TCharUpCaseTable);
@@ -459,7 +508,7 @@ begin
   while SubStrLength <= (SLength - Result + 1) do 
   begin
     for I := 1 to SubStrLength do
-    if CharUpCaseTable[SubStr[I]] <> CharUpCaseTable[s[Result + I - 1]] then
+    if CharUpCaseTable[SubStr[I]] <> CharUpCaseTable[S[Result + I - 1]] then
       goto Fail;
     Exit;
   Fail:
@@ -1386,83 +1435,16 @@ begin
 end;
 
 procedure TM3UWriter.SaveToFile(const M3U: TM3U; const Filename: String);
-
-  function FileHeader(const Attributes: TAttributeCollection) : String;
-  var
-    I : Integer;
-  begin
-    Result := '#EXTM3U';
-    for I := 0 to Attributes.Count -1 do
-    Result := Result + Format(' %s="%s"', [Attributes[I].Name, Attributes[I].Value]);
-  end;
-
-  function PlaylistDirective(const Directive: TTag) : String;
-  begin
-    if Directive.Name.StartsWith('#EXT', True) then
-      Result := Format('%s:%s', [Directive.Name, Directive.Value])
-    else
-      Result := Format('#EXT%s:%s', [Directive.Name, Directive.Value]);
-  end;
-
-  function StreamHeader(const Stream: TStream) : String;
-  var
-    I : Integer;
-  begin
-    Result := Format('#EXTINF %f,', [Stream.Length]);
-    for I := 0 to Stream.Attributes.Count -1 do
-    Result := Result + Format(' %s="%s"', [Stream.Attributes[I].Name, Stream.Attributes[I].Value]);
-    Result := Result + Format(',%s', [Stream.Name]);
-  end;
-
-  function StreamDirective(const Directive: TTag) : String;
-  begin
-    Result := PlaylistDirective(Directive);
-  end;
-
-  function StreamSource(const Stream: TStream) : String;
-  begin
-    Result := Stream.Source;
-  end;
-
 var
-  Lines : TStringList;
-  S, I  : Integer;
+  FS : TFileStream;
 begin
-  // No empty filenames
-  if (Filename.Trim = '') then raise Exception.Create('The filename can''t be empty!');
-
-  // Start
-  if Assigned(FOnStart) then FOnStart(Self);
-
-  // Write M3U File
-  Lines := TStringList.Create;
+  if (Filename.Trim.Length = 0) then raise Exception.Create('Filename can''t be empty!');
+  FS := TFileStream.Create(Filename, fmOpenWrite);
   try
-    // M3U File Header and Attributes
-    Lines.Add(FileHeader(M3U.Attributes));
-    // M3U Directives
-    for I := 0 to M3U.Directives.Count -1 do
-    Lines.Add(PlaylistDirective(M3U.Directives[I]));
-    // Streams
-    for S := 0 to M3U.Streams.Count -1 do
-    begin
-      // Progress
-      if Assigned(FOnProgress) then FOnProgress(M3U.Streams.Count, S, M3U.Streams[S]);
-      // Stream Header
-      Lines.Add(StreamHeader(M3U.Streams[S]));
-      // Stream Directives
-      for I := 0 to M3U.Streams[S].Directives.Count -1 do
-      Lines.Add(StreamDirective(M3U.Streams[S].Directives[I]));
-      // Stream Source
-      Lines.Add(StreamSource(M3U.Streams[S]));
-    end;
-    // Save to File
-    Lines.SaveToFile(Filename, TEncoding.UTF8);
+    SaveToStream(M3U, FS);
   finally
-    Lines.Free;
+    FS.Free;
   end;
-
-  // Finished
-  if Assigned(FOnFinish) then FOnFinish(Self);
 end;
 
 {*******************************************************}
@@ -1472,12 +1454,11 @@ constructor TXtreamReader.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
 
-  FGroupAttribute   := True;
-  FGroupDirective   := False;
-  FtvgNameAttribute := True;
-  FtvgIDAttribute   := True;
-  FtvgLogoAttribute := True;
-  FtvgChnoAttribute := True;
+  FAttributes := [aGroupTitle, aTvgName, aTvgID, aTvgLogo, aTvgChno, aRadio];
+
+  FScheme    := 'http';
+  FPort      := 80;
+  FUseragent := 'Mozilla/5.0 (compatible; ERDesigns.XtreamReader/1.0)';
 end;
 
 procedure TXtreamReader.LoadFromAPI(const M3U: TM3U; const StreamTypes: TXtreamStreamTypes = [stLive, stMovies, stSeries]);
@@ -1495,6 +1476,7 @@ var
   begin
     HttpClient := THTTPClient.Create;
     try
+      HTTPClient.UserAgent := FUseragent;
       URI.Scheme := Scheme;
       URI.Host   := Host;
       URI.Port   := Port;
@@ -1544,7 +1526,7 @@ var
     try
       try
         // Get Categories
-        if GroupAttribute or GroupDirective then
+        if (aGroupTitle in Attributes) or (dGroupTitle in Directives) then
         begin
           JSON := TJSONObject.ParseJSONValue(GetFromAPI([TURIParameter.Create('action', Format('get_%s_categories', [StreamTypeStr[StreamType]]))]));
           try
@@ -1586,46 +1568,58 @@ var
                   URI.Path := Format('/%s/%s/%s', [username, Password, Item.Get('stream_id').JsonValue.Value]);
                   Stream.Source := URI.ToString;
                   // Stream tvg-name attribute
-                  if tvgNameAttribute then
+                  if (aTvgName in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-name';
                     Value := Item.Get('name').JsonValue.Value;
                   end;
                   // Stream tvg-id attribute
-                  if tvgIDAttribute then
+                  if (aTvgId in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-id';
                     Value := Item.Get('epg_channel_id').JsonValue.Value;
                   end;
                   // Stream tvg-logo attribute
-                  if tvgLogoAttribute then
+                  if (aTvgLogo in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-logo';
                     Value := Item.Get('stream_icon').JsonValue.Value;
                   end;
                   // Stream tvg-chno attribute
-                  if tvgChnoAttribute then
+                  if (aTvgChno in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-chno';
                     Value := Item.Get('num').JsonValue.Value;
                   end;
                   // Stream group-title attribute
-                  if GroupAttribute then
+                  if (aGroupTitle in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'group-title';
                     Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
                   end;
                   // Stream EXTGRP directive
-                  if GroupDirective then
+                  if (dGroupTitle in Directives) then
                   with Stream.Directives.Add do
                   begin
                     Name  := '#EXTGRP';
                     Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
+                  end;
+                  // Radio attribute
+                  if (aRadio in Attributes) then
+                  if Item.Get('stream_type').JsonValue.Value.ToLower.StartsWith('radio') then
+                  with Stream.Directives.Add do
+                  begin
+                    Name  := 'radio';
+                  {$IFDEF TAGVARIANT}
+                    Value := True;
+                  {$ELSE}
+                    Value := 'true';
+                  {$ENDIF}
                   end;
                 end;
                 
@@ -1641,35 +1635,35 @@ var
                   URI.Path := Format('/movie/%s/%s/%s.%s', [username, Password, Item.Get('stream_id').JsonValue.Value, Item.Get('container_extension').JsonValue.Value]);
                   Stream.Source := URI.ToString;
                   // Stream tvg-name attribute
-                  if tvgNameAttribute then
+                  if (aTvgName in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-name';
                     Value := Item.Get('name').JsonValue.Value;
                   end;
                   // Stream tvg-logo attribute
-                  if tvgLogoAttribute then
+                  if (aTvgLogo in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-logo';
                     Value := Item.Get('stream_icon').JsonValue.Value;
                   end;
                   // Stream tvg-chno attribute
-                  if tvgChnoAttribute then
+                  if (aTvgChno in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'tvg-chno';
                     Value := Item.Get('num').JsonValue.Value;
                   end;
                   // Stream group-title attribute
-                  if GroupAttribute then
+                  if (aGroupTitle in Attributes) then
                   with Stream.Attributes.Add do
                   begin
                     Name  := 'group-title';
                     Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
                   end;
                   // Stream EXTGRP directive
-                  if GroupDirective then
+                  if (dGroupTitle in Directives) then
                   with Stream.Directives.Add do
                   begin
                     Name  := '#EXTGRP';
@@ -1698,35 +1692,35 @@ var
                       URI.Path := Format('/series/%s/%s/%s.%s', [username, Password, Item3.Get('id').JsonValue.Value, Item3.Get('container_extension').JsonValue.Value]);
                       Stream.Source := URI.ToString;
                       // Stream tvg-name attribute
-                      if tvgNameAttribute then
+                      if (aTvgName in Attributes) then
                       with Stream.Attributes.Add do
                       begin
                         Name  := 'tvg-name';
                         Value := Item3.Get('title').JsonValue.Value;
                       end;
                       // Stream tvg-logo attribute
-                      if tvgLogoAttribute then
+                      if (aTvgLogo in Attributes) then
                       with Stream.Attributes.Add do
                       begin
                         Name  := 'tvg-logo';
                         Value := Item.Get('cover').JsonValue.Value;
                       end;
                       // Stream tvg-chno attribute
-                      if tvgChnoAttribute then
+                      if (aTvgChno in Attributes) then
                       with Stream.Attributes.Add do
                       begin
                         Name  := 'tvg-chno';
                         Value := Item.Get('num').JsonValue.Value;
                       end;
                       // Stream group-title attribute
-                      if GroupAttribute then
+                      if (aGroupTitle in Attributes) then
                       with Stream.Attributes.Add do
                       begin
                         Name  := 'group-title';
                         Value := Categories.Values[Item.Get('category_id').JsonValue.Value];
                       end;
                       // Stream EXTGRP directive
-                      if GroupDirective then
+                      if (dGroupTitle in Directives) then
                       with Stream.Directives.Add do
                       begin
                         Name  := '#EXTGRP';
@@ -1815,6 +1809,124 @@ begin
 end;
 
 {*******************************************************}
+{                   PLS Reader Class                    }
+{*******************************************************}
+procedure TPLSReader.LoadFromStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+var
+  PLS : TMemIniFile;
+  ERR : Boolean;
+  Max : Integer;
+  I   : Integer;
+begin
+  ERR := False;
+  PLS := TMemIniFile.Create(Stream, TEncoding.UTF8);
+  try
+    if not PLS.SectionExists('playlist') then
+    begin
+      if Assigned(FOnError) then FOnError(ERROR_INVALID_FILE, 'Invalid PLS file, missing playlist section!');
+      ERR := True;
+    end;
+    if not PLS.ValueExists('playlist', 'NumberOfEntries') then
+    begin
+      if Assigned(FOnError) then FOnError(ERROR_MISSING_ENTRIES, 'Invalid PLS file, missing entries value!');
+      ERR := True;
+    end;
+    if not ERR then
+    begin
+      // Start
+      if Assigned(FOnStart) then FOnStart(Self);
+
+      // Read PLS
+      Max := PLS.ReadInteger('playlist', 'NumberOfEntries', 0);
+      for I := 1 to Max do
+      if PLS.ValueExists('playlist', Format('File%d', [I])) then
+      with M3U.Streams.Add do
+      begin
+        // Progress
+        if Assigned(FOnProgress) then FOnProgress(Max, I);
+        // Source
+        Source := PLS.ReadString('playlist', Format('File%d', [I]), '');
+        // Name
+        if PLS.ValueExists('playlist', Format('Title%d', [I])) then
+        Name := PLS.ReadString('playlist', Format('Title%d', [I]), '');
+        // Length
+        if PLS.ValueExists('playlist', Format('Length%d', [I])) then
+        Length := PLS.ReadFloat('playlist', Format('Length%d', [I]), -1);
+      end;
+
+      // Finish
+      if Assigned(FOnFinish) then FOnFinish(Self);
+    end;
+  finally
+    PLS.Free;
+  end;
+end;
+
+procedure TPLSReader.LoadFromFile(const M3U: TM3U; const Filename: string);
+var
+  FS : TFileStream;
+begin
+  if not FileExists(Filename) then
+    raise Exception.CreateFmt('File does''nt exist!! %s', [Filename]);
+  FS := TFileStream.Create(Filename, fmOpenRead);
+  try
+    LoadFromStream(M3U, FS);
+  finally
+    FS.Free;
+  end;
+end;
+
+{*******************************************************}
+{                   PLS Writer Class                    }
+{*******************************************************}
+procedure TPLSWriter.SaveToStream(const M3U: TM3U; const Stream: System.Classes.TStream);
+var
+  PLS  : TMemIniFile;
+  I, M : Integer;
+begin
+  PLS := TMemIniFile.Create(Stream, TEncoding.UTF8);
+  try
+    // Start
+    if Assigned(FOnStart) then FOnStart(Self);
+
+    M := M3U.Streams.Count;
+    for I := 0 to M -1 do
+    begin
+      // Progress
+      if Assigned(FOnProgress) then FOnProgress(M, I);
+      // Source
+      PLS.WriteString('playlist', Format('File%d', [I +1]), M3U.Streams[I].Source);
+      // Name
+      PLS.WriteString('playlist', Format('Title%d', [I +1]), M3U.Streams[I].Name);
+      // Length
+      PLS.WriteFloat('playlist', Format('Title%d', [I +1]), M3U.Streams[I].Length);
+    end;
+    // This variable indicates the number of tracks and therefore equals the number used for the last track
+    PLS.WriteInteger('playlist', 'NumberOfEntries', M);
+    // Playlist version. Currently only a value of 2 is valid.
+    PLS.WriteInteger('playlist', 'Version', 2);
+
+    // Finish
+    if Assigned(FOnFinish) then FOnFinish(Self);
+  finally
+    PLS.Free;
+  end;
+end;
+
+procedure TPLSWriter.SaveToFile(const M3U: TM3U; const Filename: string);
+var
+  FS : TFileStream;
+begin
+  if (Filename.Trim.Length = 0) then raise Exception.Create('Filename can''t be empty!');
+  FS := TFileStream.Create(Filename, fmOpenWrite);
+  try
+    SaveToStream(M3U, FS);
+  finally
+    FS.Free;
+  end;
+end;
+
+{*******************************************************}
 {            Register Classes and Component             }
 {*******************************************************}
 procedure Register;
@@ -1822,6 +1934,7 @@ begin
   // Register collection items and collections
   System.Classes.RegisterClasses([
     TTag,
+    TDefTag,
     TDirectiveCollection,
     TAttributeCollection,
     TStream,
@@ -1832,7 +1945,9 @@ begin
     TM3U,
     TM3UReader,
     TM3UWriter,
-    TXtreamReader
+    TXtreamReader,
+    TPLSReader,
+    TPLSWriter
   ]);
 end;
 
