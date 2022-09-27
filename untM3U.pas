@@ -524,7 +524,6 @@ uses
   System.Net.URLClient,
   System.Net.HttpClient,
   System.IniFiles,
-  Xml.xmldom,
   Xml.XMLIntf,
   Xml.XMLDoc;
 
@@ -2120,7 +2119,8 @@ begin
     TXtreamReader,
     TPLSReader,
     TPLSWriter,
-    TXSPFReader
+    TXSPFReader,
+    TXSPFWriter
   ]);
 end;
 
