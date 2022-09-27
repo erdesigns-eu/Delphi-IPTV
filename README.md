@@ -3,6 +3,4 @@ M3U class for Delphi. Use the reader/writers to read from and write to M3U, PLS 
 
 ToDo:
 - Add Enigma reader/writer
-- Add XSPF reader/writer
-
 - Add demo + package + about..
