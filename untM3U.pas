@@ -1,3 +1,44 @@
+{
+  DelphiM3U v2.0 - a lightweight, one-unit, cross-platform M3U wrapper
+  for Delphi 2010 - 10.2 Tokyo by Ernst Reidinga
+
+  This is a simple wrapper unit for IPTV M3U files, for easy editing and
+  viewing of M3U files used for IPTV services. The M3U wrapper component
+  is compatible with basic M3U files and Extended M3U files. This unit and
+  classes can also be used for non-iptv playlists for use in audio/video
+  media managers and players.
+
+  (c) Copyrights 2017-2022 Ernst Reidinga <ernstreidinga85@gmail.com>
+  This unit is free and can be used for any needs. The introduction of
+  any changes and the use of those changed library is permitted without
+  limitations. Only requirement:
+  This text must be present without changes in all modifications of library.
+
+  * The contents of this file are used with permission, subject to
+  * the Mozilla Public License Version 1.1 (the "License"); you may   *
+  * not use this file except in compliance with the License. You may  *
+  * obtain a copy of the License at                                   *
+  * http:  www.mozilla.org/MPL/MPL-1.1.html                           *
+  *                                                                   *
+  * Software distributed under the License is distributed on an       *
+  * "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or    *
+  * implied. See the License for the specific language governing      *
+  * rights and limitations under the License.                         *
+
+  Highlights:
+  - M3U Reader and Writer component
+  - PLS Reader and Writer component
+  - XSPF Reader and Writer component
+  - Xtream API reader component
+  - Support for extended M3U directives
+  - Support for extended M3U attributes
+  - Change parsing method (RegEx or Pos)
+  - Use variant tags
+
+  If you use this unit, please give credits to the original author;
+  Ernst Reidinga.
+}
+
 unit untM3U;
 
 interface
