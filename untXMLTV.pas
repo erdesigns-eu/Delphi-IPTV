@@ -4120,7 +4120,7 @@ begin
             System := VarToStrDef(CN.ChildNodes[J].Attributes['system'], '');
           end;
           // Country  - ToDo: Change to pair (lang - value)
-          if CN.ChildNodes[J].NodeName = 'url' then
+          if CN.ChildNodes[J].NodeName = 'country' then
           Prog.Country := CN.ChildNodes[J].Text;
           // Episode
           if CN.ChildNodes[J].NodeName = 'episode-num' then
