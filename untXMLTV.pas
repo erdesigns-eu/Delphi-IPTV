@@ -1,6 +1,6 @@
 {
   DelphiXMLTV v1.0 - a lightweight, one-unit, cross-platform XMLTV wrapper
-  for Delphi 2010 - 10.2 Tokyo by Ernst Reidinga
+  for Delphi 2010 - 11 by Ernst Reidinga
 
   This is a simple wrapper unit for XMLTV files, for easy editing and
   viewing of XMLTV files used for IPTV services.
@@ -1426,7 +1426,7 @@ uses
   Xml.XMLDoc,
   XML.Win.msxmldom,
   System.Variants,
-  System.Threading;
+  System.Math;
 
 {*******************************************************}
 {              Channel Display Name Class               }
@@ -3817,6 +3817,7 @@ procedure TXMLTVReader.LoadFromStream(const XMLTV: TXMLTV; const Stream: System.
         P := Pos('.', Str);
         S := Copy(Str, 1, P -1);
         Result := StrToIntDef(S, -1);
+        if (Result > -1) then Result := Result +1;
       end;
 
       1: // Episode
@@ -3824,6 +3825,7 @@ procedure TXMLTVReader.LoadFromStream(const XMLTV: TXMLTV; const Stream: System.
         P := Pos('.', Str);
         S := Copy(Str, P + 1, Pos('.', Str, P +1) -1);
         Result := StrToIntDef(S, -1);
+        if (Result > -1) then Result := Result +1;
       end;
 
       2: // Part
@@ -3833,6 +3835,7 @@ procedure TXMLTVReader.LoadFromStream(const XMLTV: TXMLTV; const Stream: System.
         P := Pos('/', S);
         if P > 0 then S := Copy(S, 1, P -1);
         Result := StrToIntDef(S, -1);
+        if (Result > -1) then Result := Result +1;
       end;
 
       3: // Parts
@@ -4301,8 +4304,372 @@ end;
 {                  XMLTV Writer Class                   }
 {*******************************************************}
 procedure TXMLTVWriter.SaveToStream(const XMLTV: TXMLTV; const Stream: System.Classes.TStream);
+
+  function ProgrammeTime(Time: TProgrammeTime) : String;
+  const
+    Signs: array[TValueSign] of String = ('', '', '+');
+  begin
+    Result := Format('%.*d%.*d%.*d%.*d%.*d%.*d %s%.*d', [
+      4, Time.Year,
+      2, Time.Month,
+      2, Time.Day,
+      2, Time.Hour,
+      2, Time.Minute,
+      2, Time.Second,
+      Signs[Sign(Time.TimeShift)], 4, Time.TimeShift]
+    );
+  end;
+
+  function ProgrammeEpisodeXMLTVNS(Episode: TProgrammeEpisode) : String;
+  begin
+    // Season
+    if Episode.Season > 0 then
+      Result := Format('%d.', [Episode.Season -1])
+    else
+      Result := '.';
+    // Episode
+    if Episode.Episode > 0 then
+      Result := Result + Format('%d.', [Episode.Episode -1])
+    else
+      Result := Result + '.';
+    // Part
+    if Episode.Part > 0 then
+    begin
+      Result := Result + Format('%d/%d.', [Episode.Part -1, Episode.Parts])
+    end else
+      Result := Result + '.';
+  end;
+
+const
+  ProgrammeLengthUnit        : array [TProgrammeLengthUnit] of String       = ('seconds', 'minutes', 'hours', '');
+  ProgrammeBoolYesNo         : array [Boolean] of String                    = ('no', 'yes');
+  ProgrammeAudioStereo       : array [TProgrammeAudioStereo] of String      = ('mono', 'stereo', 'dolby', 'dolby digital', 'bilingual', 'surround', '');
+  ProgrammeSubtitlesType     : array [TProgrammeSubtitlesType] of String    = ('teletext', 'onscreen', 'deaf-signed', '');
+  ProgrammeReviewType        : array [TProgrammeReviewType] of String       = ('text', 'url', '');
+  ProgrammeImageType         : array [TProgrammeImageType] of String        = ('poster', 'backdrop', 'still', '');
+  ProgrammeImageSize         : array [TProgrammeImageSize] of String        = ('1', '2', '3', '');
+  ProgrammeImageOrientation  : array [TProgrammeImageOrientation] of String = ('P', 'L', '');
+  ProgrammeCreditsType       : array [TProgrammeCreditsType] of String      = ('director', 'actor', 'writer', 'adapter', 'producer', 'composer', 'editor', 'presenter', 'commentator', 'guest', '');
+var
+  XML        : IXMLDocument;
+  I, J, Max  : Integer;
+  RN, SN, XN : IXMLNode;
 begin
-  // ToDo
+  XML := NewXMLDocument;
+  XML.Encoding := 'utf-8';
+  XML.Active   := True;
+
+  // Start
+  if Assigned(FOnStart) then FOnStart(Self);
+
+  // Root node
+  RN := XML.AddChild('tv');
+  with XMLTV.Data do
+  begin
+    if SourceInfoURL.Trim.Length > 0 then
+    RN.Attributes['source-info-url'] := SourceInfoURL;
+    if SourceInfoName.Trim.Length > 0 then
+    RN.Attributes['source-info-name'] := SourceInfoName;
+    if SourceDataURL.Trim.Length > 0 then
+    RN.Attributes['source-data-url'] := SourceDataURL;
+    if GeneratorInfoName.Trim.Length > 0 then
+    RN.Attributes['generator-info-name'] := GeneratorInfoName;
+    if GeneratorInfoURL.Trim.Length > 0 then
+    RN.Attributes['generator-info-url'] := GeneratorInfoURL;
+  end;
+
+  // Channels
+  Max := XMLTV.Channels.Count;
+  for I := 0 to Max -1 do
+  begin
+    // Progress
+    if Assigned(FOnProgress) then FOnProgress(Max, I);
+    SN := RN.AddChild('channel');
+    // ID
+    SN.Attributes['id'] := XMLTV.Channels[I].ID;
+    // Display name
+    for J := 0 to XMLTV.Channels[I].DisplayName.Count -1 do
+    begin
+      XN := SN.AddChild('display-name');
+      XN.Text := XMLTV.Channels[I].DisplayName[J].Value;
+      if XMLTV.Channels[I].DisplayName[J].Language.Trim.Length > 0 then
+      XN.Attributes['lang'] := XMLTV.Channels[I].DisplayName[J].Language;
+    end;
+    // Icon
+    for J := 0 to XMLTV.Channels[I].Icon.Count -1 do
+    begin
+      XN := SN.AddChild('icon');
+      XN.Attributes['src'] := XMLTV.Channels[I].Icon[J].Source;
+      if XMLTV.Channels[I].Icon[J].Width > 0 then
+      XN.Attributes['width'] := XMLTV.Channels[I].Icon[J].Width;
+      if XMLTV.Channels[I].Icon[J].Height > 0 then
+      XN.Attributes['height'] := XMLTV.Channels[I].Icon[J].Height;
+    end;
+    // URL
+    for J := 0 to XMLTV.Channels[I].URL.Count -1 do
+    begin
+      XN := SN.AddChild('url');
+      XN.Text := XMLTV.Channels[I].URL[J].Source;
+    end;
+  end;
+
+  // Programmes
+  Max := XMLTV.Programmes.Count;
+  for I := 0 to Max -1 do
+  begin
+    // Progress
+    if Assigned(FOnProgress) then FOnProgress(Max, I);
+    // Programme node
+    SN := RN.AddChild('programme');
+    // Channel
+    SN.Attributes['channel'] := XMLTV.Programmes[I].Channel;
+    // Start
+    SN.Attributes['start'] := ProgrammeTime(XMLTV.Programmes[I].Start);
+    // Stop
+    SN.Attributes['stop'] := ProgrammeTime(XMLTV.Programmes[I].Stop);
+    // Title
+    for J := 0 to XMLTV.Programmes[I].Title.Count -1 do
+    begin
+      XN := SN.AddChild('title');
+      XN.Text := XMLTV.Programmes[I].Title[J].Value;
+      if XMLTV.Programmes[I].Title[J].Language.Trim.Length > 0 then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Title[J].Language;
+    end;
+    // Subtitle
+    for J := 0 to XMLTV.Programmes[I].SubTitle.Count -1 do
+    begin
+      XN := SN.AddChild('sub-title');
+      XN.Text := XMLTV.Programmes[I].SubTitle[J].Value;
+      if XMLTV.Programmes[I].SubTitle[J].Language.Trim.Length > 0 then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].SubTitle[J].Language;
+    end;
+    // Description
+    for J := 0 to XMLTV.Programmes[I].Description.Count -1 do
+    begin
+      XN := SN.AddChild('desc');
+      XN.Text := XMLTV.Programmes[I].Description[J].Value;
+      if XMLTV.Programmes[I].Description[J].Language.Trim.Length > 0 then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Description[J].Language;
+    end;
+    // Category
+    for J := 0 to XMLTV.Programmes[I].Category.Count -1 do
+    begin
+      XN := SN.AddChild('category');
+      XN.Text := XMLTV.Programmes[I].Category[J].Value;
+      if XMLTV.Programmes[I].Category[J].Language.Trim.Length > 0 then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Category[J].Language;
+    end;
+    // Length
+    for J := 0 to XMLTV.Programmes[I].Length.Count -1 do
+    begin
+      XN := SN.AddChild('length');
+      XN.Text := XMLTV.Programmes[I].Length[J].Length.ToString;
+      if XMLTV.Programmes[I].Length[J].&Unit <> luUnknown then
+      XN.Attributes['units'] := ProgrammeLengthUnit[XMLTV.Programmes[I].Length[J].&Unit];
+    end;
+    // Icon
+    for J := 0 to XMLTV.Programmes[I].Icon.Count -1 do
+    begin
+      XN := SN.AddChild('icon');
+      XN.Attributes['src'] := XMLTV.Programmes[I].Icon[J].Source;
+      if XMLTV.Channels[I].Icon[J].Width > 0 then
+      XN.Attributes['width'] := XMLTV.Programmes[I].Icon[J].Width;
+      if XMLTV.Channels[I].Icon[J].Height > 0 then
+      XN.Attributes['height'] := XMLTV.Programmes[I].Icon[J].Height;
+    end;
+    // URL
+    for J := 0 to XMLTV.Programmes[I].URL.Count -1 do
+    begin
+      XN := SN.AddChild('url');
+      XN.Text := XMLTV.Programmes[I].URL[J].Source;
+      if XMLTV.Programmes[I].URL[J].System.Trim.Length > 0 then
+      XN.Attributes['system'] := XMLTV.Programmes[I].URL[J].System;
+    end;
+    // Country
+    if XMLTV.Programmes[I].Country.Trim.Length > 0 then
+    begin
+      XN := SN.AddChild('country');
+      XN.Text := XMLTV.Programmes[I].Country;
+    end;
+    // Episode
+    for J := 0 to XMLTV.Programmes[I].Episode.Count -1 do
+    begin
+      XN := SN.AddChild('episode-num');
+      case XMLTV.Programmes[I].Episode[J].&Type of
+        etXMLTVNS:
+        begin
+          XN.Attributes['system'] := 'xmltv_ns';
+          XN.Text := ProgrammeEpisodeXMLTVNS(XMLTV.Programmes[I].Episode[J]);
+        end;
+        etOnScreen:
+        begin
+          XN.Attributes['system'] := 'onscreen';
+          XN.Text := XMLTV.Programmes[I].Episode[J].Custom;
+        end;
+        etCustom:
+        begin
+          XN.Text := XMLTV.Programmes[I].Episode[J].Custom;
+        end;
+      end;
+    end;
+    // Video
+    if (not XMLTV.Programmes[I].Video.Present) or (not XMLTV.Programmes[I].Video.Colour) or
+       (XMLTV.Programmes[I].Video.Aspect.Length > 0) or (XMLTV.Programmes[I].Video.Quality.Length > 0) then
+    begin
+      XN := SN.AddChild('video');
+      XN.AddChild('present').Text := ProgrammeBoolYesNo[XMLTV.Programmes[I].Video.Present];
+      XN.AddChild('colour').Text := ProgrammeBoolYesNo[XMLTV.Programmes[I].Video.Colour];
+      if (XMLTV.Programmes[I].Video.Aspect.Length > 0) then
+      XN.AddChild('aspect').Text := XMLTV.Programmes[I].Video.Aspect;
+      if (XMLTV.Programmes[I].Video.Quality.Length > 0) then
+      XN.AddChild('quality').Text := XMLTV.Programmes[I].Video.Quality;
+    end;
+    // Audio
+    if (not XMLTV.Programmes[I].Audio.Present) or (XMLTV.Programmes[I].Audio.Stereo <> asUnknown) then
+    begin
+      XN := SN.AddChild('audio');
+      XN.AddChild('present').Text := ProgrammeBoolYesNo[XMLTV.Programmes[I].Audio.Present];
+      if (XMLTV.Programmes[I].Audio.Stereo <> asUnknown) then
+      XN.AddChild('stereo').Text := ProgrammeAudioStereo[XMLTV.Programmes[I].Audio.Stereo];
+    end;
+    // Subtitles
+    for J := 0 to XMLTV.Programmes[I].Subtitles.Count -1 do
+    begin
+      XN := SN.AddChild('subtitles');
+      XN.Attributes['type'] := ProgrammeSubtitlesType[XMLTV.Programmes[I].Subtitles[J].&Type];
+      with XN.AddChild('language') do
+      begin
+        Text := XMLTV.Programmes[I].Subtitles[J].Value;
+        if (XMLTV.Programmes[I].Subtitles[J].Language.Trim.Length > 0) then
+        Attributes['lang'] := XMLTV.Programmes[I].Subtitles[J].Language;
+      end;
+    end;
+    // Rating
+    for J := 0 to XMLTV.Programmes[I].Rating.Count -1 do
+    begin
+       XN := SN.AddChild('rating');
+       XN.AddChild('value').Text :=  XMLTV.Programmes[I].Rating[J].Value;
+       if XMLTV.Programmes[I].Rating[J].System.Trim.Length > 0 then
+       XN.Attributes['system'] := XMLTV.Programmes[I].Rating[J].System;
+    end;
+    // Star-rating
+    if (XMLTV.Programmes[I].StarRating.Value > 0) then
+    begin
+      XN := SN.AddChild('star-rating');
+      XN.AddChild('value').Text := Format('%f/%f', [XMLTV.Programmes[I].StarRating.Value, XMLTV.Programmes[I].StarRating.OutOf]);
+    end;
+    // Date
+    if XMLTV.Programmes[I].Date.Trim.Length > 0 then
+    begin
+      XN := SN.AddChild('date');
+      XN.Text := XMLTV.Programmes[I].Date;
+    end;
+    // New
+    if XMLTV.Programmes[I].New then
+    begin
+      XN := SN.AddChild('new');
+    end;
+    // Previously shown
+    if (XMLTV.Programmes[I].PreviouslyShown.Start.Trim.Length > 0) or
+       (XMLTV.Programmes[I].PreviouslyShown.Channel.Trim.Length > 0) then
+    begin
+      XN := SN.AddChild('previously-shown');
+      if (XMLTV.Programmes[I].PreviouslyShown.Start.Trim.Length > 0) then
+      XN.Attributes['start'] := XMLTV.Programmes[I].PreviouslyShown.Start;
+      if (XMLTV.Programmes[I].PreviouslyShown.Channel.Trim.Length > 0) then
+      XN.Attributes['channel'] := XMLTV.Programmes[I].PreviouslyShown.Channel;
+    end;
+    // Premiere
+    for J := 0 to XMLTV.Programmes[I].Premiere.Count -1 do
+    begin
+      XN := SN.AddChild('premiere');
+      XN.Text := XMLTV.Programmes[I].Premiere[J].Value;
+      if (XMLTV.Programmes[I].Premiere[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Premiere[J].Language;
+    end;
+    // Last chance
+    for J := 0 to XMLTV.Programmes[I].LastChance.Count -1 do
+    begin
+      XN := SN.AddChild('last-chance');
+      XN.Text := XMLTV.Programmes[I].LastChance[J].Value;
+      if (XMLTV.Programmes[I].LastChance[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].LastChance[J].Language;
+    end;
+    // Review
+    for J := 0 to XMLTV.Programmes[I].Review.Count -1 do
+    begin
+      XN := SN.AddChild('review');
+      XN.Text := XMLTV.Programmes[I].Review[J].Value;
+      if XMLTV.Programmes[I].Review[J].&Type <> rtUnknown then
+      XN.Attributes['type'] := ProgrammeReviewType[XMLTV.Programmes[I].Review[J].&Type];
+      if (XMLTV.Programmes[I].Review[J].Source.Trim.Length > 0) then
+      XN.Attributes['source'] := XMLTV.Programmes[I].Review[J].Source;
+      if (XMLTV.Programmes[I].Review[J].Reviewer.Trim.Length > 0) then
+      XN.Attributes['reviewer'] := XMLTV.Programmes[I].Review[J].Reviewer;
+      if (XMLTV.Programmes[I].Review[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Review[J].Language;
+    end;
+    // Image
+    for J := 0 to XMLTV.Programmes[I].Image.Count -1 do
+    begin
+      XN := SN.AddChild('image');
+      XN.Text := XMLTV.Programmes[I].Image[J].Value;
+      if (XMLTV.Programmes[I].Image[J].&Type <> itUnknown) then
+      XN.Attributes['type'] := ProgrammeImageType[XMLTV.Programmes[I].Image[J].&Type];
+      if (XMLTV.Programmes[I].Image[J].Size <> isUnknown) then
+      XN.Attributes['size'] := ProgrammeImageSize[XMLTV.Programmes[I].Image[J].Size];
+      if (XMLTV.Programmes[I].Image[J].Orientation <> ioUnknown) then
+      XN.Attributes['orient'] := ProgrammeImageOrientation[XMLTV.Programmes[I].Image[J].Orientation];
+      if (XMLTV.Programmes[I].Image[J].System.Trim.Length > 0) then
+      XN.Attributes['system'] := XMLTV.Programmes[I].Image[J].System;
+    end;
+    // Keyword
+    for J := 0 to XMLTV.Programmes[I].Keyword.Count -1 do
+    begin
+      XN := SN.AddChild('keyword');
+      XN.Text := XMLTV.Programmes[I].Keyword[J].Value;
+      if (XMLTV.Programmes[I].Keyword[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Keyword[J].Language;
+    end;
+    // Language
+    for J := 0 to XMLTV.Programmes[I].Language.Count -1 do
+    begin
+      XN := SN.AddChild('language');
+      XN.Text := XMLTV.Programmes[I].Language[J].Value;
+      if (XMLTV.Programmes[I].Language[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].Language[J].Language;
+    end;
+    // Original language
+    for J := 0 to XMLTV.Programmes[I].OriginalLanguage.Count -1 do
+    begin
+      XN := SN.AddChild('orig-language');
+      XN.Text := XMLTV.Programmes[I].OriginalLanguage[J].Value;
+      if (XMLTV.Programmes[I].OriginalLanguage[J].Language.Trim.Length > 0) then
+      XN.Attributes['lang'] := XMLTV.Programmes[I].OriginalLanguage[J].Language;
+    end;
+    // Credits
+    if XMLTV.Programmes[I].Credits.Count > 0 then
+    begin
+      XN := SN.AddChild('credits');
+      for J := 0 to XMLTV.Programmes[I].Credits.Count -1 do
+      if (XMLTV.Programmes[I].Credits[J].&Type <> ctUnknown) then
+      with XN.AddChild(ProgrammeCreditsType[XMLTV.Programmes[I].Credits[J].&Type]) do
+      begin
+        Text := XMLTV.Programmes[I].Credits[J].Value;
+        if (XMLTV.Programmes[I].Credits[J].&Type = ctActor) and
+           (XMLTV.Programmes[I].Credits[J].Role.Trim.Length > 0) then
+        Attributes['role'] := XMLTV.Programmes[I].Credits[J].Role;
+        if XMLTV.Programmes[I].Credits[J].Guest then
+        Attributes['guest'] := ProgrammeBoolYesNo[XMLTV.Programmes[I].Credits[J].Guest];
+      end;
+    end;
+  end;
+
+  // Save to stream
+  XML.SaveToStream(Stream);
+
+  // Finish
+  if Assigned(FOnFinish) then FOnFinish(Self);
 end;
 
 procedure TXMLTVWriter.SaveToFile(const XMLTV: TXMLTV; const Filename: string);
